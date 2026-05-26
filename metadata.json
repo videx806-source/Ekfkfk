@@ -1,0 +1,6 @@
+{
+  "name": "VIDEX",
+  "description": "Plataforma de streaming de video con canales de televisión en vivo, eventos deportivos y grabaciones locales.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
