@@ -106,22 +106,44 @@ object HlsRecorder {
                 val bodyString = response.body?.string() ?: return emptyList()
                 val baseUri = m3u8Url.substringBeforeLast("/")
 
-                val lines = bodyString.lineSequence()
+                val lines = bodyString.lineSequence().map { it.trim() }.toList()
+
+                // Check if it's a Master Playlist (contains other .m3u8 files)
+                val m3u8Links = lines.filter { line ->
+                    line.isNotEmpty() && !line.startsWith("#") && line.contains(".m3u8", ignoreCase = true)
+                }
+
+                if (m3u8Links.isNotEmpty()) {
+                    // It's a master playlist! Resolve the first child playlist
+                    val childLink = m3u8Links.first()
+                    val fullChildUrl = if (childLink.startsWith("http://") || childLink.startsWith("https://")) {
+                        childLink
+                    } else if (childLink.startsWith("/")) {
+                        val domainUrl = m3u8Url.substringBefore("//") + "//" + m3u8Url.substringAfter("//").substringBefore("/")
+                        "$domainUrl$childLink"
+                    } else {
+                        "$baseUri/$childLink"
+                    }
+                    // Recursive call to fetch actual segments from the child m3u8
+                    return fetchSegmentUrls(fullChildUrl)
+                }
+
                 for (line in lines) {
-                    val trimmed = line.trim()
-                    if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    if (line.isEmpty() || line.startsWith("#")) {
                         continue
                     }
                     // This line is a segment URL
-                    val fullUrl = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                        trimmed
-                    } else if (trimmed.startsWith("/")) {
+                    val fullUrl = if (line.startsWith("http://") || line.startsWith("https://")) {
+                        line
+                    } else if (line.startsWith("/")) {
                         val domainUrl = m3u8Url.substringBefore("//") + "//" + m3u8Url.substringAfter("//").substringBefore("/")
-                        "$domainUrl$trimmed"
+                        "$domainUrl$line"
                     } else {
-                        "$baseUri/$trimmed"
+                        "$baseUri/$line"
                     }
-                    urls.add(fullUrl)
+                    if (!fullUrl.contains(".m3u8", ignoreCase = true)) {
+                        urls.add(fullUrl)
+                    }
                 }
             }
         } catch (e: Exception) {

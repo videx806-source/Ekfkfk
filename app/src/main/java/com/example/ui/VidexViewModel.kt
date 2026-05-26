@@ -41,6 +41,23 @@ class VidexViewModel(application: Application) : AndroidViewModel(application) {
     // Preferences
     private val sharedPrefs = context.getSharedPreferences("videx_prefs", Context.MODE_PRIVATE)
 
+    // Favorites UI States
+    private val _favoritesState = MutableStateFlow<Set<String>>(
+        sharedPrefs.getStringSet("pref_favorites", emptySet()) ?: emptySet()
+    )
+    val favoritesState: StateFlow<Set<String>> = _favoritesState.asStateFlow()
+
+    fun toggleFavorite(channelName: String) {
+        val current = _favoritesState.value.toMutableSet()
+        if (current.contains(channelName)) {
+            current.remove(channelName)
+        } else {
+            current.add(channelName)
+        }
+        _favoritesState.value = current
+        sharedPrefs.edit().putStringSet("pref_favorites", current).apply()
+    }
+
     private val _defaultQuality = MutableStateFlow(sharedPrefs.getString("pref_quality", "Auto") ?: "Auto")
     val defaultQuality: StateFlow<String> = _defaultQuality.asStateFlow()
 
@@ -96,7 +113,7 @@ class VidexViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val cleanTitle = customTitle.replace(Regex("[^a-zA-Z0-9]"), "_")
             val dir = File(context.getExternalFilesDir(null), "VIDEX/Grabaciones")
-            val recordFile = File(dir, "grabacion_${cleanTitle}_${System.currentTimeMillis()}.mp4")
+            val recordFile = File(dir, "grabacion_${cleanTitle}_${System.currentTimeMillis()}.ts")
 
             HlsRecorder.record(context, m3u8Url, recordFile) { bytes ->
                 _recordedBytes.value = bytes

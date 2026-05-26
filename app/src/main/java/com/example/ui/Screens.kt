@@ -180,6 +180,12 @@ fun VidexTopAppHeader(isRecording: Boolean, recordedBytes: Long, onStopRecord: (
             titleContentColor = TextPrimary
         ),
         actions = {
+            // Real physical Chromecast / Google Cast button from package androidx.mediarouter
+            RealCastButton(
+                modifier = Modifier
+                    .size(36.dp)
+                    .padding(end = 4.dp)
+            )
             IconButton(
                 onClick = {},
                 modifier = Modifier.testTag("action_search_mock")
@@ -254,10 +260,13 @@ fun HomeScreen(
 ) {
     val events by viewModel.eventsState.collectAsStateWithLifecycle()
     val isLoadingEvents by viewModel.isLoadingEvents.collectAsStateWithLifecycle()
+    val favorites by viewModel.favoritesState.collectAsStateWithLifecycle()
 
     var selectedGroup by remember { mutableStateOf("TODOS") }
-    val filteredChannels = remember(selectedGroup) {
-        if (selectedGroup == "TODOS") {
+    val filteredChannels = remember(selectedGroup, favorites) {
+        if (selectedGroup == "FAVORITOS") {
+            ChannelRepository.CHANNELS.filter { favorites.contains(it.name) }
+        } else if (selectedGroup == "TODOS") {
             ChannelRepository.CHANNELS
         } else {
             ChannelRepository.CHANNELS.filter { it.group.equals(selectedGroup, ignoreCase = true) }
@@ -349,7 +358,7 @@ fun HomeScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // Category Selector Chips
+            // Category Selector Chips including FAVORITOS
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -357,10 +366,11 @@ fun HomeScreen(
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
             ) {
-                val groups = listOf("TODOS", "GENERAL", "EVENTOS", "MÚSICA", "PLUTO")
+                val groups = listOf("TODOS", "FAVORITOS", "GENERAL", "EVENTOS", "MÚSICA", "PLUTO")
                 items(groups) { group ->
                     val isSelected = selectedGroup == group
                     val chipStrokeColor = when (group) {
+                        "FAVORITOS" -> Color(0xFFFFD700)
                         "GENERAL" -> GroupGeneral
                         "EVENTOS" -> GroupEventos
                         "MÚSICA" -> GroupMusica
@@ -401,7 +411,12 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 filteredChannels.forEach { channel ->
-                    ChannelChip(channel = channel, onPlay = onPlayChannel)
+                    ChannelChip(
+                        channel = channel,
+                        isFavorite = favorites.contains(channel.name),
+                        onToggleFavorite = { viewModel.toggleFavorite(channel.name) },
+                        onPlay = onPlayChannel
+                    )
                 }
             }
         }
@@ -541,7 +556,12 @@ fun EventCard(event: Evento, onPlay: (Evento) -> Unit) {
 }
 
 @Composable
-fun ChannelChip(channel: Channel, onPlay: (Channel) -> Unit) {
+fun ChannelChip(
+    channel: Channel,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onPlay: (Channel) -> Unit
+) {
     val strokeColor = when (channel.group.uppercase()) {
         "GENERAL" -> GroupGeneral
         "EVENTOS" -> GroupEventos
@@ -552,29 +572,42 @@ fun ChannelChip(channel: Channel, onPlay: (Channel) -> Unit) {
 
     Surface(
         modifier = Modifier
-            .testTag("channel_chip_${channel.name}")
-            .clickable { onPlay(channel) },
+            .testTag("channel_chip_${channel.name}"),
         shape = RoundedCornerShape(18.dp),
         color = SurfaceDark,
         border = BorderStroke(1.dp, strokeColor.copy(alpha = 0.7f)),
         tonalElevation = 1.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(start = 8.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Box(
+            Icon(
+                imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                contentDescription = "Toggle Favorite",
+                tint = if (isFavorite) Color(0xFFFFD700) else TextSecondary.copy(alpha = 0.6f),
                 modifier = Modifier
-                    .size(6.dp)
-                    .background(strokeColor, shape = CircleShape)
+                    .size(18.dp)
+                    .clickable { onToggleFavorite() }
             )
-            Text(
-                text = channel.name,
-                color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            Row(
+                modifier = Modifier.clickable { onPlay(channel) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(strokeColor, shape = CircleShape)
+                )
+                Text(
+                    text = channel.name,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
     }
 }
@@ -969,6 +1002,22 @@ fun SettingsSelectorCard(
     }
 }
 
+@Composable
+fun RealCastButton(modifier: Modifier = Modifier) {
+    AndroidView(
+        factory = { ctx ->
+            androidx.mediarouter.app.MediaRouteButton(ctx).apply {
+                val selector = androidx.mediarouter.media.MediaRouteSelector.Builder()
+                    .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_VIDEO)
+                    .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
+                    .build()
+                setRouteSelector(selector)
+            }
+        },
+        modifier = modifier
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
@@ -983,69 +1032,32 @@ fun PlayerScreen(
     val recordedBytes by viewModel.recordedBytes.collectAsStateWithLifecycle()
     val autoPlay by viewModel.autoPlay.collectAsStateWithLifecycle()
 
-    var showQualitySheet by remember { mutableStateOf(false) }
-    var showCastSheet by remember { mutableStateOf(false) }
-
-    var videoQuality by remember { mutableStateOf("Auto") }
+    var isFullscreen by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableStateOf(1.0f) }
 
     val formattedRecordedBytes = remember(recordedBytes) { formatBytes(recordedBytes) }
 
-    // Setup ExoPlayer using Media3
-    val player = remember(streamUrl) {
-        ExoPlayer.Builder(context).build().apply {
-            playWhenReady = autoPlay
+    val view = androidx.compose.ui.platform.LocalView.current
+    val window = remember(view) { (context as? android.app.Activity)?.window }
+
+    LaunchedEffect(isFullscreen) {
+        window?.let { win ->
+            val windowInsetsController = androidx.core.view.WindowCompat.getInsetsController(win, view)
+            if (isFullscreen) {
+                windowInsetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                windowInsetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                windowInsetsController.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
-    // Prepare Player with given streamUrl
-    DisposableEffect(streamUrl) {
-        val mediaUri = Uri.parse(streamUrl)
-        val mediaItem = if (isLive) {
-            MediaItem.Builder()
-                .setUri(mediaUri)
-                .setLiveConfiguration(
-                    MediaItem.LiveConfiguration.Builder()
-                        .setMaxPlaybackSpeed(1.02f)
-                        .build()
-                ).build()
+    BackHandler {
+        if (isFullscreen) {
+            isFullscreen = false
         } else {
-            MediaItem.fromUri(mediaUri)
+            onBack()
         }
-        player.setMediaItem(mediaItem)
-        player.setPlaybackSpeed(playbackSpeed)
-        player.prepare()
-
-        onDispose {
-            player.release()
-        }
-    }
-
-    // Sync Playback Speed
-    LaunchedEffect(playbackSpeed) {
-        player.setPlaybackSpeed(playbackSpeed)
-    }
-
-    // Sync Video Quality Constraints on ExoPlayer
-    LaunchedEffect(videoQuality) {
-        val maxVideoWidth = when (videoQuality) {
-            "1080p" -> 1920
-            "720p" -> 1280
-            "480p" -> 854
-            "360p" -> 640
-            else -> Int.MAX_VALUE
-        }
-        val maxVideoHeight = when (videoQuality) {
-            "1080p" -> 1080
-            "720p" -> 720
-            "480p" -> 480
-            "360p" -> 360
-            else -> Int.MAX_VALUE
-        }
-        player.trackSelectionParameters = player.trackSelectionParameters
-            .buildUpon()
-            .setMaxVideoSize(maxVideoWidth, maxVideoHeight)
-            .build()
     }
 
     Column(
@@ -1053,295 +1065,269 @@ fun PlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // --- 1. Custom Player Toolbar ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SurfaceDark)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("player_back_button")) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Default.ArrowBack,
-                    contentDescription = "Regular back navigation",
-                    tint = Color.White
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = if (isLive) "Streaming en Vivo" else "Grabación local",
-                    color = if (isLive) RedLive else AccentCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
+        if (!isFullscreen) {
+            // --- 1. Custom Player Toolbar ---
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceDark)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.testTag("player_back_button")) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Default.ArrowBack,
+                        contentDescription = "Regular back navigation",
+                        tint = Color.White
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (isLive) "Streaming en Vivo" else "Grabación local",
+                        color = if (isLive) RedLive else AccentCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                // Native Cast connection in the toolbar
+                RealCastButton(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .padding(end = 4.dp)
                 )
             }
         }
 
-        // --- 2. 16:9 Video Canvas (ExoPlayer Host) ---
+        // --- 2. 16:9 Video Canvas (NATIVE VIDEOVIEW HOST) ---
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .background(Color.Black),
+            modifier = if (isFullscreen) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+            }.background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
+            var isBufferLoading by remember { mutableStateOf(true) }
+
             AndroidView(
                 factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        this.player = player
-                        useController = true
-                        setShowPreviousButton(false)
-                        setShowNextButton(false)
+                    android.widget.VideoView(ctx).apply {
+                        layoutParams = android.view.ViewGroup.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
+
+                        setOnPreparedListener { mp ->
+                            isBufferLoading = false
+                            try {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                    val params = mp.playbackParams
+                                    params.speed = playbackSpeed
+                                    mp.playbackParams = params
+                                }
+                            } catch (e: Exception) {
+                                // Ignore speed tweaks for non-playback speeds feeds
+                            }
+                            if (autoPlay) {
+                                start()
+                            }
+                        }
+
+                        setOnInfoListener { _, what, _ ->
+                            if (what == android.media.MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                                isBufferLoading = true
+                            } else if (what == android.media.MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                                isBufferLoading = false
+                            }
+                            true
+                        }
+
+                        setOnErrorListener { _, what, extra ->
+                            isBufferLoading = false
+                            Toast.makeText(ctx, "No se pudo reproducir este stream", Toast.LENGTH_SHORT).show()
+                            true
+                        }
                     }
+                },
+                update = { vv ->
+                    vv.setVideoURI(Uri.parse(streamUrl))
                 },
                 modifier = Modifier.fillMaxSize()
             )
-        }
 
-        // --- 3. Stream Info & Live Status ---
-        Card(
-            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-            shape = RoundedCornerShape(0.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
+            if (isBufferLoading) {
+                CircularProgressIndicator(color = AccentCyan)
+            }
+
+            // Floating Toggle Screen Overlay - Cinematic view switcher
+            IconButton(
+                onClick = { isFullscreen = !isFullscreen },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), shape = CircleShape)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(if (isLive) RedLive else AccentCyan, shape = CircleShape)
-                    )
-                    Text(
-                        text = if (isLive) "VIVO" else "OFFLINE",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                }
-
-                if (isLive) {
-                    LiveStreamTimeIndicator()
-                }
+                Icon(
+                    imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    contentDescription = "Pantalla completa",
+                    tint = Color.White
+                )
             }
         }
 
-        Divider(color = TextSecondary.copy(alpha = 0.2f), thickness = 1.dp)
-
-        // --- 4. Controls Action Area ---
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(BgDark)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                text = "Acciones de Reproducción",
-                color = AccentCyan,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // Cast device Button
-                Button(
-                    onClick = { showCastSheet = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDarkVariant, contentColor = Color.White),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(vertical = 12.dp)
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(imageVector = Icons.Default.Cast, contentDescription = "Cast stream", tint = AccentCyan)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Transmitir", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                // Record local button
-                Button(
-                    onClick = {
-                        if (isRecordingState) {
-                            viewModel.stopRecordingStream()
-                            Toast.makeText(context, "Grabación guardada exitosamente", Toast.LENGTH_SHORT).show()
-                        } else {
-                            viewModel.startRecordingStream(streamUrl, title)
-                            Toast.makeText(context, "Grabación iniciada segmento a segmento...", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRecordingState) RecordingRed.copy(alpha = 0.2f) else SurfaceDarkVariant,
-                        contentColor = if (isRecordingState) RecordingRed else Color.White
-                    ),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(vertical = 12.dp)
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.RadioButtonChecked,
-                            contentDescription = "Record",
-                            tint = if (isRecordingState) RecordingRed else TextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (isRecordingState) "Grabando: $formattedRecordedBytes" else "Grabar",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                // Video settings buttons
-                Button(
-                    onClick = { showQualitySheet = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDarkVariant, contentColor = Color.White),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(vertical = 12.dp)
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(imageVector = Icons.Default.Tune, contentDescription = "Quality preferences", tint = AccentCyan)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Calidad: $videoQuality", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Playback velocity adjuster
+        if (!isFullscreen) {
+            // --- 3. Stream Info & Live Status ---
             Card(
-                colors = CardDefaults.cardColors(containerColor = SurfaceDarkVariant),
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                shape = RoundedCornerShape(0.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "Velocidad de reproducción: ${playbackSpeed}x",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Slider(
-                        value = playbackSpeed,
-                        onValueChange = { playbackSpeed = it },
-                        valueRange = 0.5f..2.0f,
-                        steps = 5,
-                        colors = SliderDefaults.colors(
-                            thumbColor = AccentCyan,
-                            activeTrackColor = AccentCyan,
-                            inactiveTrackColor = TextSecondary.copy(alpha = 0.3f)
-                        )
-                    )
-                }
-            }
-        }
-    }
-
-    // Bottom Sheet: Cast Devices Selectors
-    if (showCastSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showCastSheet = false },
-            containerColor = SurfaceDark,
-            contentColor = Color.White
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    text = "Dispositivos de Transmisión (Cast)",
-                    color = AccentCyan,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Divider(color = TextSecondary.copy(alpha = 0.2f))
-
-                val mockDevices = listOf("Smart TV Baño", "Chromecast Living", "Videx Receiver", "Habitación Principal")
-                mockDevices.forEach { device ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                Toast.makeText(context, "Conectando con $device...", Toast.LENGTH_SHORT).show()
-                                showCastSheet = false
-                            }
-                            .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(imageVector = Icons.Default.Tv, contentDescription = "TV device", tint = AccentCyan)
-                        Text(text = device, color = Color.White, fontSize = 14.sp)
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(if (isLive) RedLive else AccentCyan, shape = CircleShape)
+                        )
+                        Text(
+                            text = if (isLive) "VIVO" else "OFFLINE",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+
+                    if (isLive) {
+                        LiveStreamTimeIndicator()
                     }
                 }
             }
-        }
-    }
 
-    // Bottom Sheet: Quality Adjuster
-    if (showQualitySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showQualitySheet = false },
-            containerColor = SurfaceDark,
-            contentColor = Color.White
-        ) {
+            Divider(color = TextSecondary.copy(alpha = 0.2f), thickness = 1.dp)
+
+            // --- 4. Controls Action Area ---
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
+                    .fillMaxSize()
+                    .background(BgDark)
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "Seleccionar Calidad del Stream",
+                    text = "Acciones de Reproducción",
                     color = AccentCyan,
-                    fontSize = 16.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Divider(color = TextSecondary.copy(alpha = 0.2f))
 
-                val qualities = listOf("Auto", "1080p", "720p", "480p", "360p")
-                qualities.forEach { q ->
-                    Row(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Full Cast device option opening system selection directly
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                videoQuality = q
-                                showQualitySheet = false
-                            }
-                            .padding(vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .weight(1f)
+                            .height(58.dp)
+                            .background(SurfaceDarkVariant, shape = RoundedCornerShape(10.dp))
+                            .padding(horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(text = q, color = Color.White, fontSize = 14.sp)
-                        if (videoQuality == q) {
-                            Icon(imageVector = Icons.Default.Check, contentDescription = "Active selection", tint = AccentCyan)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            RealCastButton(modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Transmitir", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
+                    }
+
+                    // Record local button
+                    Button(
+                        onClick = {
+                            if (isRecordingState) {
+                                viewModel.stopRecordingStream()
+                                Toast.makeText(context, "Grabación guardada en Mis Grabaciones", Toast.LENGTH_SHORT).show()
+                            } else {
+                                viewModel.startRecordingStream(streamUrl, title)
+                                Toast.makeText(context, "Grabación iniciada...", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isRecordingState) RecordingRed.copy(alpha = 0.2f) else SurfaceDarkVariant,
+                            contentColor = if (isRecordingState) RecordingRed else Color.White
+                        ),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.RadioButtonChecked,
+                                contentDescription = "Record",
+                                tint = if (isRecordingState) RecordingRed else TextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (isRecordingState) "REC..." else "Grabar Stream",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDarkVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Ajustar velocidad del player: ${playbackSpeed}x",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Slider(
+                            value = playbackSpeed,
+                            onValueChange = { playbackSpeed = it },
+                            valueRange = 0.5f..2.0f,
+                            steps = 5,
+                            colors = SliderDefaults.colors(
+                                thumbColor = AccentCyan,
+                                activeTrackColor = AccentCyan,
+                                inactiveTrackColor = TextSecondary.copy(alpha = 0.3f)
+                            )
+                        )
                     }
                 }
             }
