@@ -103,8 +103,9 @@ object HlsRecorder {
             val request = Request.Builder().url(m3u8Url).build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return emptyList()
+                val finalUrl = response.request.url.toString()
                 val bodyString = response.body?.string() ?: return emptyList()
-                val baseUri = m3u8Url.substringBeforeLast("/")
+                val baseUri = finalUrl.substringBeforeLast("/")
 
                 val lines = bodyString.lineSequence().map { it.trim() }.toList()
 
@@ -119,7 +120,7 @@ object HlsRecorder {
                     val fullChildUrl = if (childLink.startsWith("http://") || childLink.startsWith("https://")) {
                         childLink
                     } else if (childLink.startsWith("/")) {
-                        val domainUrl = m3u8Url.substringBefore("//") + "//" + m3u8Url.substringAfter("//").substringBefore("/")
+                        val domainUrl = finalUrl.substringBefore("//") + "//" + finalUrl.substringAfter("//").substringBefore("/")
                         "$domainUrl$childLink"
                     } else {
                         "$baseUri/$childLink"
@@ -136,7 +137,7 @@ object HlsRecorder {
                     val fullUrl = if (line.startsWith("http://") || line.startsWith("https://")) {
                         line
                     } else if (line.startsWith("/")) {
-                        val domainUrl = m3u8Url.substringBefore("//") + "//" + m3u8Url.substringAfter("//").substringBefore("/")
+                        val domainUrl = finalUrl.substringBefore("//") + "//" + finalUrl.substringAfter("//").substringBefore("/")
                         "$domainUrl$line"
                     } else {
                         "$baseUri/$line"

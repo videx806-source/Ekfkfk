@@ -39,9 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.example.data.*
 import com.example.ui.theme.*
@@ -1032,6 +1029,9 @@ fun PlayerScreen(
     val recordedBytes by viewModel.recordedBytes.collectAsStateWithLifecycle()
     val autoPlay by viewModel.autoPlay.collectAsStateWithLifecycle()
 
+    val favorites by viewModel.favoritesState.collectAsStateWithLifecycle()
+    val isFavorite = favorites.contains(title)
+
     var isFullscreen by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableStateOf(1.0f) }
 
@@ -1039,6 +1039,7 @@ fun PlayerScreen(
 
     val view = androidx.compose.ui.platform.LocalView.current
     val window = remember(view) { (context as? android.app.Activity)?.window }
+    val activity = context as? android.app.Activity
 
     LaunchedEffect(isFullscreen) {
         window?.let { win ->
@@ -1046,8 +1047,10 @@ fun PlayerScreen(
             if (isFullscreen) {
                 windowInsetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
                 windowInsetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             } else {
                 windowInsetsController.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
         }
     }
@@ -1057,6 +1060,91 @@ fun PlayerScreen(
             isFullscreen = false
         } else {
             onBack()
+        }
+    }
+
+    // Initialize LibVLC and VLC MediaPlayer
+    val libVlc = remember {
+        val options = ArrayList<String>()
+        options.add("-vvv")
+        options.add("--http-reconnect")
+        options.add("--network-caching=2500")
+        org.videolan.libvlc.LibVLC(context, options)
+    }
+
+    val vlcMediaPlayer = remember(libVlc) {
+        org.videolan.libvlc.MediaPlayer(libVlc)
+    }
+
+    val videoLayout = remember {
+        org.videolan.libvlc.util.VLCVideoLayout(context)
+    }
+
+    var isBufferLoading by remember { mutableStateOf(true) }
+
+    // Set speed on vlcMediaPlayer when slider state shifts
+    LaunchedEffect(playbackSpeed) {
+        try {
+            vlcMediaPlayer.rate = playbackSpeed
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    DisposableEffect(vlcMediaPlayer) {
+        vlcMediaPlayer.setEventListener { event ->
+            when (event.type) {
+                org.videolan.libvlc.MediaPlayer.Event.Buffering -> {
+                    isBufferLoading = event.buffering < 100f
+                }
+                org.videolan.libvlc.MediaPlayer.Event.Playing -> {
+                    isBufferLoading = false
+                }
+                org.videolan.libvlc.MediaPlayer.Event.EncounteredError -> {
+                    isBufferLoading = false
+                }
+            }
+        }
+
+        onDispose {
+            try {
+                vlcMediaPlayer.stop()
+                vlcMediaPlayer.detachViews()
+                vlcMediaPlayer.release()
+                libVlc.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    LaunchedEffect(streamUrl) {
+        try {
+            isBufferLoading = true
+            vlcMediaPlayer.stop()
+            vlcMediaPlayer.detachViews()
+
+            vlcMediaPlayer.attachViews(videoLayout, null, true, false)
+
+            val uri = Uri.parse(streamUrl)
+            val media = org.videolan.libvlc.Media(libVlc, uri)
+            media.setHWDecoderEnabled(true, false)
+            media.addOption(":network-caching=2500")
+            media.addOption(":clock-jitter=0")
+            media.addOption(":clock-synchro=0")
+
+            vlcMediaPlayer.media = media
+            media.release()
+
+            vlcMediaPlayer.rate = playbackSpeed
+
+            if (autoPlay) {
+                vlcMediaPlayer.play()
+            }
+        } catch (e: java.lang.Exception) {
+            e.printStackTrace()
+            isBufferLoading = false
+            Toast.makeText(context, "No se pudo reproducir este stream", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1098,6 +1186,14 @@ fun PlayerScreen(
                         fontWeight = FontWeight.Medium
                     )
                 }
+                // Favorites button directly inside player screen toolbar
+                IconButton(onClick = { viewModel.toggleFavorite(title) }) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                        contentDescription = "Toggle Favorite",
+                        tint = if (isFavorite) Color(0xFFFFD700) else Color.White
+                    )
+                }
                 // Native Cast connection in the toolbar
                 RealCastButton(
                     modifier = Modifier
@@ -1107,7 +1203,7 @@ fun PlayerScreen(
             }
         }
 
-        // --- 2. 16:9 Video Canvas (NATIVE VIDEOVIEW HOST) ---
+        // --- 2. 16:9 Video Canvas (NATIVE VLC HOST) ---
         Box(
             modifier = if (isFullscreen) {
                 Modifier.fillMaxSize()
@@ -1118,54 +1214,9 @@ fun PlayerScreen(
             }.background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            var isBufferLoading by remember { mutableStateOf(true) }
-
             AndroidView(
-                factory = { ctx ->
-                    android.widget.VideoView(ctx).apply {
-                        layoutParams = android.view.ViewGroup.LayoutParams(
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-
-                        val mc = android.widget.MediaController(ctx)
-                        mc.setAnchorView(this)
-                        setMediaController(mc)
-
-                        setOnPreparedListener { mp ->
-                            isBufferLoading = false
-                            try {
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                                    val params = mp.playbackParams
-                                    params.speed = playbackSpeed
-                                    mp.playbackParams = params
-                                }
-                            } catch (e: Exception) {
-                                // Ignore speed tweaks for non-playback speeds feeds
-                            }
-                            if (autoPlay) {
-                                start()
-                            }
-                        }
-
-                        setOnInfoListener { _, what, _ ->
-                            if (what == android.media.MediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                                isBufferLoading = true
-                            } else if (what == android.media.MediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                                isBufferLoading = false
-                            }
-                            true
-                        }
-
-                        setOnErrorListener { _, what, extra ->
-                            isBufferLoading = false
-                            Toast.makeText(ctx, "No se pudo reproducir este stream", Toast.LENGTH_SHORT).show()
-                            true
-                        }
-                    }
-                },
-                update = { vv ->
-                    vv.setVideoURI(Uri.parse(streamUrl))
+                factory = {
+                    videoLayout
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -1326,14 +1377,14 @@ fun PlayerScreen(
                                 thumbColor = AccentCyan,
                                 activeTrackColor = AccentCyan,
                                 inactiveTrackColor = TextSecondary.copy(alpha = 0.3f)
-                            )
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+                              )
+                          )
+                      }
+                  }
+              }
+          }
+      }
+  }
 
 @Composable
 fun LiveStreamTimeIndicator() {
