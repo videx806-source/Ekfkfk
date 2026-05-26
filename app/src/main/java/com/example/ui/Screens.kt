@@ -1001,18 +1001,39 @@ fun SettingsSelectorCard(
 
 @Composable
 fun RealCastButton(modifier: Modifier = Modifier) {
-    AndroidView(
-        factory = { ctx ->
-            androidx.mediarouter.app.MediaRouteButton(ctx).apply {
-                val selector = androidx.mediarouter.media.MediaRouteSelector.Builder()
-                    .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_VIDEO)
-                    .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
-                    .build()
-                setRouteSelector(selector)
-            }
-        },
-        modifier = modifier
-    )
+    var hasError by remember { mutableStateOf(false) }
+
+    if (hasError) {
+        IconButton(
+            onClick = { },
+            modifier = modifier
+        ) {
+            Icon(
+                imageVector = Icons.Default.Cast,
+                contentDescription = "Cast stream",
+                tint = Color.White
+            )
+        }
+    } else {
+        AndroidView(
+            factory = { ctx ->
+                try {
+                    androidx.mediarouter.app.MediaRouteButton(ctx).apply {
+                        val selector = androidx.mediarouter.media.MediaRouteSelector.Builder()
+                            .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_VIDEO)
+                            .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
+                            .build()
+                        setRouteSelector(selector)
+                    }
+                } catch (t: Throwable) {
+                    t.printStackTrace()
+                    hasError = true
+                    android.view.View(ctx)
+                }
+            },
+            modifier = modifier
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1063,21 +1084,45 @@ fun PlayerScreen(
         }
     }
 
+    var vlcFailedToLoad by remember { mutableStateOf(false) }
+
     // Initialize LibVLC and VLC MediaPlayer
     val libVlc = remember {
-        val options = ArrayList<String>()
-        options.add("-vvv")
-        options.add("--http-reconnect")
-        options.add("--network-caching=2500")
-        org.videolan.libvlc.LibVLC(context, options)
+        try {
+            val options = ArrayList<String>()
+            options.add("-vvv")
+            options.add("--http-reconnect")
+            options.add("--network-caching=2500")
+            org.videolan.libvlc.LibVLC(context, options)
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            vlcFailedToLoad = true
+            null
+        }
     }
 
     val vlcMediaPlayer = remember(libVlc) {
-        org.videolan.libvlc.MediaPlayer(libVlc)
+        if (libVlc != null) {
+            try {
+                org.videolan.libvlc.MediaPlayer(libVlc)
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                vlcFailedToLoad = true
+                null
+            }
+        } else {
+            null
+        }
     }
 
     val videoLayout = remember {
-        org.videolan.libvlc.util.VLCVideoLayout(context)
+        try {
+            org.videolan.libvlc.util.VLCVideoLayout(context)
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            vlcFailedToLoad = true
+            null
+        }
     }
 
     var isBufferLoading by remember { mutableStateOf(true) }
@@ -1085,14 +1130,14 @@ fun PlayerScreen(
     // Set speed on vlcMediaPlayer when slider state shifts
     LaunchedEffect(playbackSpeed) {
         try {
-            vlcMediaPlayer.rate = playbackSpeed
+            vlcMediaPlayer?.rate = playbackSpeed
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
     DisposableEffect(vlcMediaPlayer) {
-        vlcMediaPlayer.setEventListener { event ->
+        vlcMediaPlayer?.setEventListener { event ->
             when (event.type) {
                 org.videolan.libvlc.MediaPlayer.Event.Buffering -> {
                     isBufferLoading = event.buffering < 100f
@@ -1108,10 +1153,10 @@ fun PlayerScreen(
 
         onDispose {
             try {
-                vlcMediaPlayer.stop()
-                vlcMediaPlayer.detachViews()
-                vlcMediaPlayer.release()
-                libVlc.release()
+                vlcMediaPlayer?.stop()
+                vlcMediaPlayer?.detachViews()
+                vlcMediaPlayer?.release()
+                libVlc?.release()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -1119,32 +1164,34 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(streamUrl) {
-        try {
-            isBufferLoading = true
-            vlcMediaPlayer.stop()
-            vlcMediaPlayer.detachViews()
+        if (vlcMediaPlayer != null && libVlc != null && videoLayout != null) {
+            try {
+                isBufferLoading = true
+                vlcMediaPlayer.stop()
+                vlcMediaPlayer.detachViews()
 
-            vlcMediaPlayer.attachViews(videoLayout, null, true, false)
+                vlcMediaPlayer.attachViews(videoLayout, null, true, false)
 
-            val uri = Uri.parse(streamUrl)
-            val media = org.videolan.libvlc.Media(libVlc, uri)
-            media.setHWDecoderEnabled(true, false)
-            media.addOption(":network-caching=2500")
-            media.addOption(":clock-jitter=0")
-            media.addOption(":clock-synchro=0")
+                val uri = Uri.parse(streamUrl)
+                val media = org.videolan.libvlc.Media(libVlc, uri)
+                media.setHWDecoderEnabled(true, false)
+                media.addOption(":network-caching=2500")
+                media.addOption(":clock-jitter=0")
+                media.addOption(":clock-synchro=0")
 
-            vlcMediaPlayer.media = media
-            media.release()
+                vlcMediaPlayer.media = media
+                media.release()
 
-            vlcMediaPlayer.rate = playbackSpeed
+                vlcMediaPlayer.rate = playbackSpeed
 
-            if (autoPlay) {
-                vlcMediaPlayer.play()
+                if (autoPlay) {
+                    vlcMediaPlayer.play()
+                }
+            } catch (e: java.lang.Exception) {
+                e.printStackTrace()
+                isBufferLoading = false
+                Toast.makeText(context, "No se pudo reproducir este stream", Toast.LENGTH_SHORT).show()
             }
-        } catch (e: java.lang.Exception) {
-            e.printStackTrace()
-            isBufferLoading = false
-            Toast.makeText(context, "No se pudo reproducir este stream", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1203,7 +1250,7 @@ fun PlayerScreen(
             }
         }
 
-        // --- 2. 16:9 Video Canvas (NATIVE VLC HOST) ---
+        // --- 2. 16:9 Video Canvas (NATIVE VLC HOST WITH STANDARD FALLBACK) ---
         Box(
             modifier = if (isFullscreen) {
                 Modifier.fillMaxSize()
@@ -1214,12 +1261,68 @@ fun PlayerScreen(
             }.background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            AndroidView(
-                factory = {
-                    videoLayout
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+            if (vlcFailedToLoad || videoLayout == null) {
+                AndroidView(
+                    factory = { ctx ->
+                        android.widget.VideoView(ctx).apply {
+                            layoutParams = android.view.ViewGroup.LayoutParams(
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+
+                            val mc = android.widget.MediaController(ctx)
+                            mc.setAnchorView(this)
+                            setMediaController(mc)
+
+                            setOnPreparedListener { mp ->
+                                isBufferLoading = false
+                                try {
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                        val params = mp.playbackParams
+                                        params.speed = playbackSpeed
+                                        mp.playbackParams = params
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                                if (autoPlay) {
+                                    start()
+                                }
+                            }
+
+                            setOnInfoListener { _, what, _ ->
+                                if (what == android.media.MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                                    isBufferLoading = true
+                                } else if (what == android.media.MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                                    isBufferLoading = false
+                                }
+                                true
+                            }
+
+                            setOnErrorListener { _, what, extra ->
+                                isBufferLoading = false
+                                Toast.makeText(ctx, "No se pudo reproducir este stream", Toast.LENGTH_SHORT).show()
+                                true
+                            }
+                        }
+                    },
+                    update = { vv ->
+                        try {
+                            vv.setVideoURI(Uri.parse(streamUrl))
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                AndroidView(
+                    factory = {
+                        videoLayout
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
             if (isBufferLoading) {
                 CircularProgressIndicator(color = AccentCyan)
